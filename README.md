@@ -222,3 +222,179 @@ sudo cp samplesheet.csv /data/nfs/nf-core/$USER/samplesheet.csv
 
 If all goes well, the command's output will include:
 **Pipeline completed successfully**
+
+## NVIDIA GPU configuration
+
+The following settings can be applied to share the GPU(s) available on the host
+with the K8s cluster, allowing us to run nf-core pipeline tasks with GPU
+acceleration.
+
+### NVIDIA drivers
+
+To begin with, the NVIDIA kernel drivers and utils specific to your GPU need to
+be installed.
+
+Note: the following instructions refer to **Ubuntu 24.04**, but can be easily
+adapted to other Linux distributions.
+
+```bash
+# Get a list of supported drivers for your GPUs:
+ubuntu-drivers devices
+# Based on the output, decide which series to install, e.g. 535, 580, etc:
+sudo apt-get install nvidia-headless-535-server nvidia-utils-535-server
+# Reboot if needed
+```
+
+Check if everything is ok by running *nvidia-smi*:
+
+```bash
+# The output includes the driver version, CUDA version, GPU details and more
+nvidia-smi
+```
+
+### NVIDIA Container Toolkit
+
+Install the NVIDIA Container Toolkit:
+
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+  && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+    sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+    sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+
+# If after installing the NVIDIA container toolkit, nvidia-smi fails with:
+# "Nvidia NVML Driver/library version mismatch", do a reboot
+
+# Configure Docker and Containerd to use the NVIDIA Container Toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo nvidia-ctk runtime configure --runtime=containerd
+
+# Test containerd with the NVIDIA Container Toolkit to make sure everything works
+sudo ctr image pull docker.io/nvidia/cuda:12.1.1-base-ubuntu22.04
+sudo ctr run --rm -t \
+--runc-binary=/usr/bin/nvidia-container-runtime \
+--env NVIDIA_VISIBLE_DEVICES=all \
+docker.io/nvidia/cuda:12.1.1-base-ubuntu22.04 \
+test nvidia-smi
+```
+
+### MVIDIA Kubernetes settings
+
+Configure k3s's containerd with the NVIDIA Container Toolkit:
+
+```bash
+sudo nvidia-ctk runtime configure --runtime=containerd --config /var/lib/rancher/k3s/agent/etc/containerd/config.toml
+# Restart k3s to apply the settings
+sudo systemctl restart k3s
+```
+
+Add the NVIDIA RuntimeClass:
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+    name: nvidia
+handler: nvidia
+EOF
+```
+
+### NVIDIA K8s Device Plugin
+
+The k8s Device Plugin is used to share GPU resources within a K8s cluster.
+
+First we need the [Helm](https://github.com/helm/helm) binaries:
+
+```bash
+wget https://get.helm.sh/helm-v4.0.0-linux-amd64.tar.gz
+tar zxvf helm-v4.0.0-linux-amd64.tar.gz
+mv linux-amd64/helm .
+rm -rf linux-amd64 && rm helm-v4.0.0-linux-amd64.tar.gz
+```
+
+Install the Device Plugin using Helm:
+
+```bash
+./helm repo add nvdp https://nvidia.github.io/k8s-device-plugin
+./helm repo update
+```
+
+There are various strategies to share NVIDIA GPUs among K8s pods or jobs,
+including
+[time-slicing](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/gpu-sharing.html),
+[MPS](https://docs.nvidia.com/deploy/mps/index.html) and
+[MIG](https://www.nvidia.com/en-us/technologies/multi-instance-gpu/).
+Covering the differences is outside of the current scope, we will use
+time-slicing in our PoC.
+
+In a nutshell, the time-slicing settings define how many shares of a GPU we
+want to set. Setting the right number is a fine balance between how many tasks
+we want to run concurrently and the available memory. To do so, adjust the
+*replicas* setting in the *time_slicing_values.yaml* file accordingly or just
+leave the current value for an initial evaluation.
+
+We can now configure the Device Plugin:
+
+```bash
+helm upgrade -i \
+nvidia-device-plugin \
+nvdp/nvidia-device-plugin \
+--version=0.17.0 \
+--namespace nvdp \
+--create-namespace \
+--set runtimeClassName=nvidia \
+--set migStrategy=none \
+--set gfd.enabled=true \
+--set-file config.map.config=time_slicing_values.yaml
+```
+
+This will take a few minutes, you can verify the progress by cheking the
+status of the Device Plugin pods:
+
+```bash
+# Wait until the status of all pods is "Running"
+kubectl get pods -n nvdp
+```
+
+Last, we need to wait until the node configuration is complete:
+
+```bash
+# When done, the ouput includes "nvidia.com/gpu.sharing-strategy=time-slicing"
+kubectl describe node $(hostname) | grep nvidia.com/gpu.sharing-strategy
+```
+
+### Verify GPU access from within a K8s job
+
+```bash
+cat <<EOF | kubectl apply -f -
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: nvidia-smi
+  namespace: nf-core
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      runtimeClassName: nvidia
+      containers:
+      - name: nvidia-smi
+        image: nvidia/cuda:12.6.3-devel-ubuntu24.04
+        command: ["/usr/bin/nvidia-smi"]
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+EOF
+
+kubectl apply -f nvidia-smi-job.yaml
+kubectl wait --for=condition=complete job/nvidia-smi
+# If all went well, the logs include the nvidia-smi output
+kubectl logs job/nvidia-smi
+kubectl delete job/nvidia-smi
+```
