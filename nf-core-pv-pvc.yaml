@@ -1,0 +1,39 @@
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nf-core-data-pv
+spec:
+  capacity:
+    storage: 10Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    server: YOUR_IP_ADDRESS
+    path: "/"
+  mountOptions:
+    - nfsvers=4
+    - acregmax=1
+    - acregmin=1
+    - acdirmin=1
+    - acdirmax=1
+  storageClassName: ""
+  claimRef:
+    namespace: nf-core
+    name: nf-core-data-pvc
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nf-core-data-pvc
+  namespace: nf-core
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: ""
+  volumeName: nf-core-data-pv
