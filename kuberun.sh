@@ -19,6 +19,11 @@ SPEC_FILE="pod.yaml"
 PVC_PATH="/workspace"
 CFG_PATH="/etc/nextflow"
 
+IMAGE="registry.bbk-mres:5000/nextflow:latest"
+#IMAGE="nextflow/nextflow:latest"
+
+NXF_SYNTAX_PARSER="${NXF_SYNTAX_PARSER:-v1}"
+
 # write pod spec to file
 cat > ${SPEC_FILE} <<EOF
 apiVersion: v1
@@ -38,8 +43,8 @@ spec:
   serviceAccountName: pod-creator
   containers:
   - name: ${POD_NAME}
-    image: nextflow/nextflow:latest
-    imagePullPolicy: IfNotPresent
+    image: ${IMAGE}
+    imagePullPolicy: Always
     env:
     - name: NXF_OPTS
       value: "-Xms1g -Xmx4g"
@@ -51,6 +56,8 @@ spec:
       value: k8s
     - name: NXF_ANSI_LOG
       value: "false"
+    - name: NXF_SYNTAX_PARSER
+      value: ${NXF_SYNTAX_PARSER}
     #command: ["sleep", "100000"]
     command:
     - /bin/bash
