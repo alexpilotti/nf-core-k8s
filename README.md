@@ -341,7 +341,7 @@ leave the current value for an initial evaluation.
 We can now configure the Device Plugin:
 
 ```bash
-helm upgrade -i \
+./helm upgrade -i \
 nvidia-device-plugin \
 nvdp/nvidia-device-plugin \
 --version=0.17.0 \
@@ -392,7 +392,6 @@ spec:
             nvidia.com/gpu: 1
 EOF
 
-kubectl apply -f nvidia-smi-job.yaml
 kubectl wait --for=condition=complete job/nvidia-smi
 # If all went well, the logs include the nvidia-smi output
 kubectl logs job/nvidia-smi
