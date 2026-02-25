@@ -397,3 +397,34 @@ kubectl wait --for=condition=complete job/nvidia-smi
 kubectl logs job/nvidia-smi
 kubectl delete job/nvidia-smi
 ```
+
+### Optional: set the k3s service default runtime class
+
+This is needed only when specifying explicitly the
+*runtimeClassName* when creating pods or jobs is not an
+option (e.g., old Nextflow versions).
+
+```bash
+sudo vi /etc/systemd/system/k3s.service
+```
+
+Add *"--default-runtime nvidia"* at the end:
+
+```bash
+ExecStart=/usr/local/bin/k3s \
+    server \
+    --default-runtime nvidia
+```
+
+Restart the service:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart k3s.service
+```
+
+Check to ensure the default runtime is set:
+
+```bash
+sudo crictl info | grep -A1 defaultRuntimeName
+```
